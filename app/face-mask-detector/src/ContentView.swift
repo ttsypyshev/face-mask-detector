@@ -7,7 +7,7 @@ import os
 
 struct ContentView: View {
     @StateObject private var viewModel = CameraViewModel()
-    
+
     var body: some View {
         ZStack {
             Group {
@@ -26,9 +26,27 @@ struct ContentView: View {
                 }
             }
             .overlay(
-                StatusView(text: viewModel.detectionStatus)
-                    .padding(),
-                alignment: .bottom
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: {
+                            viewModel.switchCamera()
+                        }) {
+                            Image(systemName: "arrow.triangle.2.circlepath.camera")
+                                .resizable()
+                                .frame(width: 30, height: 25)
+                                .padding()
+                                .background(Color.black.opacity(0.5))
+                                .clipShape(Circle())
+                                .foregroundColor(.white)
+                        }
+                        .padding(.trailing, 16)
+                        .padding(.top, 60)
+                    }
+                    Spacer()
+                    StatusView(text: viewModel.detectionStatus)
+                        .padding(.bottom)
+                }
             )
         }
         .ignoresSafeArea()
@@ -41,10 +59,10 @@ struct ContentView: View {
 
 struct StatusView: View {
     let text: String
-    
+
     var body: some View {
         Text(text)
-            .id(text) // Анимация при смене текста
+            .id(text)
             .font(.title2)
             .fontWeight(.bold)
             .foregroundColor(.white)
@@ -53,6 +71,7 @@ struct StatusView: View {
             .cornerRadius(10)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
             .animation(.easeInOut, value: text)
+            .padding(.bottom, 20)
     }
 }
 
@@ -61,7 +80,7 @@ struct StatusView: View {
 struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
     var videoGravity: AVLayerVideoGravity = .resizeAspectFill
-    
+
     func makeUIView(context: Context) -> UIView {
         PreviewView(session: session, videoGravity: videoGravity)
     }
@@ -99,6 +118,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     private let logger = Logger(subsystem: "CameraApp", category: "CameraViewModel")
     private var detector: MaskDetectionVideoHelper?
     private var lastUpdate = Date()
+    private var currentCameraPosition: AVCaptureDevice.Position = .back
+    private var currentInput: AVCaptureDeviceInput?
 
     func configure() {
         AVCaptureDevice.requestAccess(for: .video) { granted in
@@ -121,20 +142,22 @@ final class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutpu
 
     private func setupCamera() {
         session.beginConfiguration()
+        session.inputs.forEach { session.removeInput($0) }
         configureInput()
         configureOutput()
         session.commitConfiguration()
 
         setupDetector()
 
-        // Call startRunning on a background thread to avoid UI unresponsiveness
         DispatchQueue.global(qos: .userInitiated).async {
             self.session.startRunning()
         }
     }
 
     private func configureInput() {
-        guard let camera = AVCaptureDevice.default(for: .video) else {
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera,
+                                                   for: .video,
+                                                   position: currentCameraPosition) else {
             logger.error("Камера не найдена")
             return
         }
@@ -143,6 +166,7 @@ final class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutpu
             let input = try AVCaptureDeviceInput(device: camera)
             if session.canAddInput(input) {
                 session.addInput(input)
+                currentInput = input
             }
         } catch {
             logger.error("Ошибка при создании входа камеры: \(error.localizedDescription)")
@@ -150,6 +174,8 @@ final class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     }
 
     private func configureOutput() {
+        session.outputs.forEach { session.removeOutput($0) }
+
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
@@ -164,6 +190,13 @@ final class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     private func setupDetector() {
         let detector = MaskDetector(minConfidence: 0.8)
         self.detector = MaskDetectionVideoHelper(maskDetector: detector, resizeMode: .centerCrop)
+    }
+
+    // MARK: - Switch Camera
+
+    func switchCamera() {
+        currentCameraPosition = currentCameraPosition == .back ? .front : .back
+        setupCamera()
     }
 
     // MARK: - Frame Processing
